@@ -1,9 +1,12 @@
 package dev.yanshouwang.camerax
 
-import android.graphics.Point
+import android.graphics.*
 import androidx.camera.core.Camera
 import androidx.camera.core.ImageProxy
 import com.google.mlkit.vision.barcode.common.Barcode
+import io.flutter.BuildConfig
+import java.io.ByteArrayOutputStream
+
 
 val Any.TAG: String
     get() = javaClass.simpleName
@@ -89,6 +92,96 @@ val ImageProxy.nv21: ByteArray
         return data
     }
 
+val ImageProxy.rotatedYuv420: ByteArray
+    get() {
+        val yuv420 = ByteArray(width * height * 3 / 2)
+        // Rotate the Y luma
+        var i = 0
+        for (x in 0 until width) {
+            for (y in height - 1 downTo 0) {
+                yuv420[i] = yuv[y * width + x]
+                i++
+            }
+        }
+        // Rotate the U and V color components
+        i = width * height * 3 / 2 - 1
+        var x = width - 1
+        while (x > 0) {
+            for (y in 0 until (height / 2)) {
+                yuv420[i] = yuv[width * height + y * width + x]
+                i--
+                yuv420[i] = yuv[width * height + y * width + (x - 1)]
+                i--
+            }
+            x -= 2
+        }
+        return yuv420
+    }
+
+val ImageProxy.jpeg: ByteArray
+    get() {
+        val out = ByteArrayOutputStream()
+
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), 100, out)
+
+        /*
+        val yBuffer = planes[0].buffer
+        val vuBuffer = planes[2].buffer
+
+        val ySize = yBuffer.remaining()
+        val vuSize = vuBuffer.remaining()
+
+        val nv21Array = ByteArray(ySize + vuSize)
+
+        yBuffer.get(nv21Array, 0, ySize)
+        vuBuffer.get(nv21Array, ySize, vuSize)
+
+        val yuvImage = YuvImage(nv21Array, ImageFormat.NV21, width, height, null)
+        yuvImage.compressToJpeg(Rect(0, 0, yuvImage.width, yuvImage.height), 100, out)
+
+         */
+
+        /*
+        val ySize = y.buffer.remaining()
+        val uSize = u.buffer.remaining()
+        val vSize = v.buffer.remaining()
+
+        val size = ySize + uSize + vSize
+        val data = ByteArray(size)
+
+        var offset = 0
+        y.buffer.get(data, offset, ySize)
+        offset += ySize
+        u.buffer.get(data, offset, uSize)
+        offset += uSize
+        v.buffer.get(data, offset, vSize)
+
+        val bm = BitmapFactory.decodeByteArray(data, 0, data.size)
+        var bitmap = bm
+
+        // On android the camera rotation and the screen rotation
+        // are off by 90 degrees, so if you are capturing an image
+        // in "portrait" orientation, you'll need to rotate the image.
+        if (this.imageInfo.rotationDegrees != 0) {
+            val matrix = Matrix()
+            matrix.postRotate(this.imageInfo.rotationDegrees.toFloat())
+            val scaledBitmap = Bitmap.createScaledBitmap(
+                bm,
+                bm.width, bm.height, true
+            )
+            bitmap = Bitmap.createBitmap(
+                scaledBitmap, 0, 0,
+                scaledBitmap.width, scaledBitmap.height, matrix, true
+            )
+        }
+
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
+         */
+
+        return out.toByteArray()
+    }
+
 val ImageProxy.PlaneProxy.size
     get() = buffer.remaining()
 
@@ -102,41 +195,51 @@ val ImageProxy.v: ImageProxy.PlaneProxy
     get() = planes[2]
 
 val Barcode.data: Map<String, Any?>
-    get() = mapOf("corners" to cornerPoints?.map { corner -> corner.data }, "format" to format,
-            "rawBytes" to rawBytes, "rawValue" to rawValue, "type" to valueType,
-            "calendarEvent" to calendarEvent?.data, "contactInfo" to contactInfo?.data,
-            "driverLicense" to driverLicense?.data, "email" to email?.data,
-            "geoPoint" to geoPoint?.data, "phone" to phone?.data, "sms" to sms?.data,
-            "url" to url?.data, "wifi" to wifi?.data)
+    get() = mapOf(
+        "corners" to cornerPoints?.map { corner -> corner.data }, "format" to format,
+        "rawBytes" to rawBytes, "rawValue" to rawValue, "type" to valueType,
+        "calendarEvent" to calendarEvent?.data, "contactInfo" to contactInfo?.data,
+        "driverLicense" to driverLicense?.data, "email" to email?.data,
+        "geoPoint" to geoPoint?.data, "phone" to phone?.data, "sms" to sms?.data,
+        "url" to url?.data, "wifi" to wifi?.data
+    )
 
 val Point.data: Map<String, Double>
     get() = mapOf("x" to x.toDouble(), "y" to y.toDouble())
 
 val Barcode.CalendarEvent.data: Map<String, Any?>
-    get() = mapOf("description" to description, "end" to end?.rawValue, "location" to location,
-            "organizer" to organizer, "start" to start?.rawValue, "status" to status,
-            "summary" to summary)
+    get() = mapOf(
+        "description" to description, "end" to end?.rawValue, "location" to location,
+        "organizer" to organizer, "start" to start?.rawValue, "status" to status,
+        "summary" to summary
+    )
 
 val Barcode.ContactInfo.data: Map<String, Any?>
-    get() = mapOf("addresses" to addresses.map { address -> address.data },
-            "emails" to emails.map { email -> email.data }, "name" to name?.data,
-            "organization" to organization, "phones" to phones.map { phone -> phone.data },
-            "title" to title, "urls" to urls)
+    get() = mapOf(
+        "addresses" to addresses.map { address -> address.data },
+        "emails" to emails.map { email -> email.data }, "name" to name?.data,
+        "organization" to organization, "phones" to phones.map { phone -> phone.data },
+        "title" to title, "urls" to urls
+    )
 
 val Barcode.Address.data: Map<String, Any?>
     get() = mapOf("addressLines" to addressLines, "type" to type)
 
 val Barcode.PersonName.data: Map<String, Any?>
-    get() = mapOf("first" to first, "formattedName" to formattedName, "last" to last,
-            "middle" to middle, "prefix" to prefix, "pronunciation" to pronunciation,
-            "suffix" to suffix)
+    get() = mapOf(
+        "first" to first, "formattedName" to formattedName, "last" to last,
+        "middle" to middle, "prefix" to prefix, "pronunciation" to pronunciation,
+        "suffix" to suffix
+    )
 
 val Barcode.DriverLicense.data: Map<String, Any?>
-    get() = mapOf("addressCity" to addressCity, "addressState" to addressState,
-            "addressStreet" to addressStreet, "addressZip" to addressZip, "birthDate" to birthDate,
-            "documentType" to documentType, "expiryDate" to expiryDate, "firstName" to firstName,
-            "gender" to gender, "issueDate" to issueDate, "issuingCountry" to issuingCountry,
-            "lastName" to lastName, "licenseNumber" to licenseNumber, "middleName" to middleName)
+    get() = mapOf(
+        "addressCity" to addressCity, "addressState" to addressState,
+        "addressStreet" to addressStreet, "addressZip" to addressZip, "birthDate" to birthDate,
+        "documentType" to documentType, "expiryDate" to expiryDate, "firstName" to firstName,
+        "gender" to gender, "issueDate" to issueDate, "issuingCountry" to issuingCountry,
+        "lastName" to lastName, "licenseNumber" to licenseNumber, "middleName" to middleName
+    )
 
 val Barcode.Email.data: Map<String, Any?>
     get() = mapOf("address" to address, "body" to body, "subject" to subject, "type" to type)

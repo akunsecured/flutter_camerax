@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'barcode.dart';
 import 'camera_args.dart';
 import 'camera_facing.dart';
+import 'camera_image.dart';
 import 'torch_state.dart';
 import 'util.dart';
 
@@ -17,8 +18,14 @@ abstract class CameraController {
   /// Torch state of the camera.
   ValueNotifier<TorchState> get torchState;
 
+  ValueNotifier<bool> get streamingState;
+
+  bool get isStreaming;
+
   /// A stream of barcodes.
   Stream<Barcode> get barcodes;
+
+  Stream<CameraImage> get images;
 
   /// Create a [CameraController].
   ///
@@ -30,6 +37,10 @@ abstract class CameraController {
 
   /// Start the camera asynchronously.
   Future<void> startAsync();
+
+  Future<void> startImageStream([int? delay]);
+
+  Future<void> stopImageStream();
 
   /// Switch the torch's state.
   void torch();
@@ -48,9 +59,6 @@ class _CameraController implements CameraController {
   static const authorized = 1;
   static const denied = 2;
 
-  static const analyze_none = 0;
-  static const analyze_barcode = 1;
-
   static int? id;
   static StreamSubscription? subscription;
 
@@ -59,16 +67,26 @@ class _CameraController implements CameraController {
   final ValueNotifier<CameraArgs?> args;
   @override
   final ValueNotifier<TorchState> torchState;
+  @override
+  final ValueNotifier<bool> streamingState;
+
+  @override
+  bool get isStreaming => streamingState.value;
 
   bool torchable;
   late StreamController<Barcode> barcodesController;
+  late StreamController<CameraImage> imageController;
 
   @override
   Stream<Barcode> get barcodes => barcodesController.stream;
 
+  @override
+  Stream<CameraImage> get images => imageController.stream;
+
   _CameraController(this.facing)
       : args = ValueNotifier(null),
         torchState = ValueNotifier(TorchState.off),
+        streamingState = ValueNotifier(false),
         torchable = false {
     // In case new instance before dispose.
     if (id != null) {
@@ -76,10 +94,10 @@ class _CameraController implements CameraController {
     }
     id = hashCode;
     // Create barcode stream controller.
-    barcodesController = StreamController.broadcast(
-      onListen: () => tryAnalyze(analyze_barcode),
-      onCancel: () => tryAnalyze(analyze_none),
-    );
+    barcodesController = StreamController.broadcast();
+
+    imageController = StreamController.broadcast();
+
     // Listen event handler.
     subscription =
         event.receiveBroadcastStream().listen((data) => handleEvent(data));
@@ -96,6 +114,13 @@ class _CameraController implements CameraController {
       case 'barcode':
         final barcode = Barcode.fromNative(data);
         barcodesController.add(barcode);
+        break;
+      case 'imageBytes':
+        final cameraImage = CameraImage.fromNative(data);
+        imageController.add(cameraImage);
+        break;
+      case 'streaming':
+        streamingState.value = data;
         break;
       default:
         throw UnimplementedError();
@@ -159,5 +184,17 @@ class _CameraController implements CameraController {
         'CameraController.$name called after CameraController.dispose\n'
         'CameraController methods should not be used after calling dispose.';
     assert(hashCode == id, message);
+  }
+
+  @override
+  Future<void> startImageStream([int? delay]) async {
+    ensure('startImageStream');
+    await method.invokeMethod('startImageStream', delay);
+  }
+
+  @override
+  Future<void> stopImageStream() async {
+    ensure('stopImageStream');
+    await method.invokeMethod('stopImageStream');
   }
 }

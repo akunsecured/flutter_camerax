@@ -4,29 +4,36 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.pm.PackageManager
+import android.graphics.ImageFormat
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.util.Size
 import android.view.Surface
+import android.view.Surface.ROTATION_90
 import androidx.annotation.IntDef
 import androidx.annotation.NonNull
-import androidx.camera.core.Camera
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
+import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.mlkit.vision.MlKitAnalyzer
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.google.mlkit.vision.barcode.BarcodeScanning
+import io.flutter.Log
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 import io.flutter.view.TextureRegistry
+import java.util.*
 
 class CameraXHandler(private val activity: Activity, private val textureRegistry: TextureRegistry) :
-    MethodChannel.MethodCallHandler, EventChannel.StreamHandler, PluginRegistry.RequestPermissionsResultListener {
+    MethodChannel.MethodCallHandler, EventChannel.StreamHandler,
+    PluginRegistry.RequestPermissionsResultListener {
     companion object {
-        private const val REQUEST_CODE = 19930430
+        private const val REQUEST_CODE = 20230413
+        private const val INVALID_TIME: Long = -1
     }
 
     private var sink: EventChannel.EventSink? = null
@@ -35,11 +42,16 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
     private var cameraProvider: ProcessCameraProvider? = null
     private var camera: Camera? = null
     private var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
+    private var imageAnalyzer: ImageAnalysis? = null
 
     @AnalyzeMode
     private var analyzeMode: Int = AnalyzeMode.NONE
 
-    override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: MethodChannel.Result) {
+    private var initialized: Boolean = false
+
+    private var lastImageTaken: Long = -1
+
+    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "state" -> stateNative(result)
             "request" -> requestNative(result)
@@ -47,8 +59,95 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
             "torch" -> torchNative(call, result)
             "analyze" -> analyzeNative(call, result)
             "stop" -> stopNative(result)
+            "startImageStream" -> startImageStream(call, result)
+            "stopImageStream" -> stopImageStream(result)
+            "isStreaming" -> isStreaming(result)
             else -> result.notImplemented()
         }
+    }
+
+    private fun isStreaming(result: MethodChannel.Result) =
+        result.success(analyzeMode == AnalyzeMode.IMAGE_BYTES)
+
+    private fun startImageStream(call: MethodCall, result: MethodChannel.Result) {
+        if (analyzeMode == AnalyzeMode.IMAGE_BYTES) {
+            result.error("ERROR", "Image stream is already started", null)
+            return
+        }
+
+        sink?.success(
+            mapOf(
+                "name" to "streaming",
+                "data" to true,
+            )
+        )
+
+        val delay = call.arguments as Int?
+        Log.d("ImageStream", "Image streaming started with delay: $delay")
+
+        val executor = ContextCompat.getMainExecutor(activity)
+
+        analyzeMode = AnalyzeMode.IMAGE_BYTES
+
+        imageAnalyzer?.setAnalyzer(
+            executor
+        ) { image ->
+            val now = Calendar.getInstance().time.time
+
+            if (delay != null) {
+                // Log.d("ImageStream", "Now: $now, last: $lastImageTaken")
+                if (lastImageTaken != INVALID_TIME && ((now - lastImageTaken) < delay)) {
+                    // Log.d("ImageStream", "Returning..")
+                    image.close()
+                    return@setAnalyzer
+                }
+            }
+
+            if (image.format == ImageFormat.YUV_420_888) {
+                val imageBytes = image.jpeg
+
+                sink?.success(
+                    mapOf(
+                        "name" to "imageBytes",
+                        "data" to mapOf(
+                            "bytes" to imageBytes,
+                            "timestamp" to now,
+                            "size" to mapOf(
+                                "width" to image.width,
+                                "height" to image.height,
+                            ),
+                            "sent" to Calendar.getInstance().time.time,
+                        ),
+                    )
+                )
+
+                lastImageTaken = now
+            }
+
+            image.close()
+        }
+
+        result.success(null)
+    }
+
+    private fun stopImageStream(result: MethodChannel.Result) {
+        if (analyzeMode == AnalyzeMode.NONE) {
+            result.error("ERROR", "Image stream is already stopped", null)
+            return
+        }
+
+        analyzeMode = AnalyzeMode.NONE
+
+        imageAnalyzer?.clearAnalyzer()
+
+        sink?.success(
+            mapOf(
+                "name" to "streaming",
+                "data" to false,
+            )
+        )
+
+        result.success(null)
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -97,10 +196,14 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
     private fun startNative(call: MethodCall, result: MethodChannel.Result) {
         val future = ProcessCameraProvider.getInstance(activity)
         val executor = ContextCompat.getMainExecutor(activity)
+
         future.addListener({
             cameraProvider = future.get()
+            cameraProvider?.unbindAll()
+
             textureEntry = textureRegistry.createSurfaceTexture()
             val textureId = textureEntry!!.id()
+
             // Preview
             val surfaceProvider = Preview.SurfaceProvider { request ->
                 val resolution = request.resolution
@@ -110,33 +213,25 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
                 request.provideSurface(surface, executor) { }
             }
             val preview = Preview.Builder().build().apply { setSurfaceProvider(surfaceProvider) }
+
             // Analyzer
-            val barcodeScanner = BarcodeScanning.getClient()
-            val detectors = listOf(barcodeScanner)
-            val analyzer = MlKitAnalyzer(detectors, ImageAnalysis.COORDINATE_SYSTEM_ORIGINAL, executor) {
-                val barcodes = it.getValue(barcodeScanner)
-                if (barcodes.isNullOrEmpty()) {
-                    return@MlKitAnalyzer
-                }
-                for (barcode in barcodes) {
-                    val event = mapOf("name" to "barcode", "data" to barcode.data)
-                    sink?.success(event)
-                }
-            }
-            val analysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build().apply { setAnalyzer(executor, analyzer) }
+            imageAnalyzer = ImageAnalysis.Builder()
+                .setTargetRotation(ROTATION_90)
+                .setTargetResolution(Size(1280, 720))
+                .build()
+
             // Bind to lifecycle.
             val owner = activity as LifecycleOwner
             val selector =
                 if (call.arguments == 0) CameraSelector.DEFAULT_FRONT_CAMERA
                 else CameraSelector.DEFAULT_BACK_CAMERA
-            camera = cameraProvider!!.bindToLifecycle(owner, selector, preview, analysis)
+            camera = cameraProvider!!.bindToLifecycle(owner, selector, preview, imageAnalyzer)
             camera!!.cameraInfo.torchState.observe(owner) { state ->
                 // TorchState.OFF = 0; TorchState.ON = 1
                 val event = mapOf("name" to "torchState", "data" to state)
                 sink?.success(event)
             }
+
             // TODO: seems there's not a better way to get the final resolution
             @SuppressLint("RestrictedApi")
             val resolution = preview.attachedSurfaceResolution!!
@@ -147,7 +242,11 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
                 "width" to height,
                 "height" to width
             )
-            val answer = mapOf("textureId" to textureId, "size" to size, "torchable" to camera!!.torchable)
+            val answer =
+                mapOf("textureId" to textureId, "size" to size, "torchable" to camera!!.torchable)
+
+            initialized = true
+
             result.success(answer)
         }, executor)
     }
@@ -178,12 +277,13 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
     }
 }
 
-@IntDef(AnalyzeMode.NONE, AnalyzeMode.BARCODE)
+@IntDef(AnalyzeMode.NONE, AnalyzeMode.BARCODE, AnalyzeMode.IMAGE_BYTES)
 @Target(AnnotationTarget.FIELD)
 @Retention(AnnotationRetention.SOURCE)
 annotation class AnalyzeMode {
     companion object {
         const val NONE = 0
         const val BARCODE = 1
+        const val IMAGE_BYTES = 2
     }
 }

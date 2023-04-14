@@ -21,7 +21,9 @@ class CameraView extends StatelessWidget {
 
   Widget _build(BuildContext context, CameraArgs? value) {
     if (value == null) {
-      return Container(color: Colors.black);
+      return Center(
+        child: Text('Camera is not yet initialized'),
+      );
     } else {
       return ClipRect(
         child: Transform.scale(
