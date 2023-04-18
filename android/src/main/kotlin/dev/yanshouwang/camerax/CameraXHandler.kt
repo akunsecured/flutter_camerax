@@ -117,6 +117,7 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
                                 "height" to image.height,
                             ),
                             "sent" to Calendar.getInstance().time.time,
+                            "process_time" to Calendar.getInstance().time.time - now,
                         ),
                     )
                 )

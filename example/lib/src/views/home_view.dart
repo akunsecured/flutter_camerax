@@ -22,6 +22,7 @@ class _HomeViewState extends State<HomeView> {
   final List<CameraImage> images = [];
 
   final List<int> averageTimeToTakePicture = [];
+  final List<int> averageTimeToProcessImage = [];
   final List<int> averageTimeToArrive = [];
 
   @override
@@ -55,6 +56,7 @@ class _HomeViewState extends State<HomeView> {
     images.clear();
 
     averageTimeToTakePicture.clear();
+    averageTimeToProcessImage.clear();
     averageTimeToArrive.clear();
 
     _imageSub = _cameraController.images.listen((event) async {
@@ -65,6 +67,7 @@ class _HomeViewState extends State<HomeView> {
       unawaited(_saveImage(event.imageBytes, event.timestamp));
 
       averageTimeToArrive.add(event.arrivalTime!);
+      averageTimeToProcessImage.add(event.processTime);
 
       if (images.isNotEmpty) {
         averageTimeToTakePicture.add(event.timestamp - images.last.timestamp);
@@ -88,6 +91,8 @@ class _HomeViewState extends State<HomeView> {
     print(
         'Average time to take a picture: ${averageTimeToTakePicture.average} ms');
     print(
+        'Average time to process an image: ${averageTimeToProcessImage.average} ms');
+    print(
         'Average time to wait for the arrival of a picture: ${averageTimeToArrive.average} ms');
 
     goToResults();
@@ -100,22 +105,6 @@ class _HomeViewState extends State<HomeView> {
         title: const Text('CameraX'),
       ),
       body: CameraView(_cameraController),
-      bottomNavigationBar: BottomAppBar(
-        shape: CircularNotchedRectangle(),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            IconButton(
-              icon: Icon(Icons.home),
-              onPressed: () {},
-            ),
-            IconButton(
-              icon: Icon(Icons.person),
-              onPressed: () {},
-            ),
-          ],
-        ),
-      ),
       floatingActionButton: ValueListenableBuilder<bool>(
         valueListenable: _cameraController.streamingState,
         builder: (_, bool isStreaming, __) => FloatingActionButton(

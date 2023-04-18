@@ -19,6 +19,7 @@ class CameraImage {
   final Uint8List imageBytes;
   final int timestamp;
   final int sent;
+  final int processTime;
   final ImageSize size;
 
   int? arrivalTime;
@@ -28,6 +29,7 @@ class CameraImage {
     required this.timestamp,
     required this.sent,
     required this.size,
+    required this.processTime,
     this.arrivalTime,
   });
 
@@ -35,6 +37,7 @@ class CameraImage {
         imageBytes: map['bytes'] ?? Uint8List(0),
         timestamp: map['timestamp'] ?? -1,
         sent: map['sent'] ?? -1,
+        processTime: map['process_time'] ?? -1,
         size: ImageSize.fromMap(map['size'] ?? {}),
       );
 }
