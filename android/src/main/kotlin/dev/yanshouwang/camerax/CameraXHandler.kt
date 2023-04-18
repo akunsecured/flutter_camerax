@@ -5,21 +5,15 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
-import android.os.Handler
-import android.os.Looper
-import android.os.SystemClock
 import android.util.Size
 import android.view.Surface
 import android.view.Surface.ROTATION_90
 import androidx.annotation.IntDef
-import androidx.annotation.NonNull
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.mlkit.vision.MlKitAnalyzer
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
-import com.google.mlkit.vision.barcode.BarcodeScanning
 import io.flutter.Log
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -95,9 +89,7 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
             val now = Calendar.getInstance().time.time
 
             if (delay != null) {
-                // Log.d("ImageStream", "Now: $now, last: $lastImageTaken")
                 if (lastImageTaken != INVALID_TIME && ((now - lastImageTaken) < delay)) {
-                    // Log.d("ImageStream", "Returning..")
                     image.close()
                     return@setAnalyzer
                 }
