@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 import 'dart:ui';
 
-import 'package:camerax/src/util.dart';
+import 'camera_size.dart';
 
 class CameraTimeStatistics {
   final int processTime;
@@ -41,7 +41,7 @@ class CameraImage {
   factory CameraImage.fromMap(Map map) => CameraImage(
         imageBytes: map['bytes'] ?? Uint8List(0),
         timestamp: map['timestamp'] ?? -1,
-        size: toSize(
+        size: sizeFromMap(
           map['size'] ?? {},
         ),
         timeStatistics: map['time_statistics'] != null

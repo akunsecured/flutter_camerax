@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:camerax/src/camera_permission_state.dart';
+import 'package:camerax/src/camera_size.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 
@@ -8,7 +9,6 @@ import 'camera_args.dart';
 import 'camera_facing.dart';
 import 'camera_image.dart';
 import 'torch_state.dart';
-import 'util.dart';
 
 /// A camera controller.
 abstract class CameraController {
@@ -31,8 +31,14 @@ abstract class CameraController {
   /// [facing] target facing used to select camera.
   ///
   /// [formats] the barcode formats for image analyzer.
-  factory CameraController([CameraFacing facing = CameraFacing.back]) =>
-      _CameraController(facing);
+  factory CameraController({
+    CameraFacing facing = CameraFacing.back,
+    CameraSize size = CameraSize.HD,
+  }) =>
+      _CameraController(
+        facing: facing,
+        cameraSize: size,
+      );
 
   /// Start the camera asynchronously.
   Future<void> initCamera();
@@ -42,6 +48,9 @@ abstract class CameraController {
 
   /// Stop the image stream.
   Future<void> stopImageStream();
+
+  /// Sets the output image size.
+  Future<void> setOutputImageSize(Size size);
 
   /// Switch the torch's state.
   void torch();
@@ -59,7 +68,8 @@ class _CameraController implements CameraController {
   static int? _id;
   static StreamSubscription? _subscription;
 
-  final CameraFacing _facing;
+  final CameraFacing facing;
+  final CameraSize cameraSize;
   bool _torchable;
   late StreamController<CameraImage> _imageController;
 
@@ -78,8 +88,10 @@ class _CameraController implements CameraController {
   @override
   Stream<CameraImage> get images => _imageController.stream;
 
-  _CameraController(this._facing)
-      : args = ValueNotifier(null),
+  _CameraController({
+    required this.facing,
+    required this.cameraSize,
+  })  : args = ValueNotifier(null),
         torchState = ValueNotifier(TorchState.off),
         streamingState = ValueNotifier(false),
         _torchable = false {
@@ -150,11 +162,12 @@ class _CameraController implements CameraController {
     final result = await _method.invokeMapMethod<String, dynamic>(
       'initCamera',
       {
-        'selector': _facing.index,
+        'selector': facing.index,
+        'size': cameraSize.getSize().toMap(),
       },
     );
     final textureId = result?['textureId'];
-    final size = toSize(result?['size']);
+    final size = sizeFromMap(result?['size']);
     args.value = CameraArgs(textureId, size);
     _torchable = result?['torchable'];
   }
@@ -175,6 +188,12 @@ class _CameraController implements CameraController {
   Future<void> stopImageStream() async {
     _ensure('stopImageStream');
     await _method.invokeMethod('stopImageStream');
+  }
+
+  @override
+  Future<void> setOutputImageSize(Size size) async {
+    _ensure('setOutputImageSize');
+    await _method.invokeMethod('setOutputImageSize', size.toMap());
   }
 
   @override

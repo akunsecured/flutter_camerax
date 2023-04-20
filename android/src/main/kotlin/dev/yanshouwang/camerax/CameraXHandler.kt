@@ -50,6 +50,7 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
             "stopCamera" -> stopCamera(result)
             "startImageStream" -> startImageStream(call, result)
             "stopImageStream" -> stopImageStream(result)
+            "setOutputImageSize" -> setOutputImageSize(call, result)
             "isStreaming" -> isStreaming(result)
             else -> result.notImplemented()
         }
@@ -58,7 +59,7 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
     private fun isStreaming(result: MethodChannel.Result) =
         result.success(isStreaming)
 
-    private fun startImageStream(args: Map<String, Any>?) {
+    private fun startImageStream(args: Map<*, *>?) {
         val delay: Int? = args?.get("delay") as Int?
         val debugging: Boolean = (args?.get("debugging") as Boolean?) ?: false
 
@@ -135,7 +136,7 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
             return
         }
 
-        startImageStream(call.arguments as Map<String, Any>?)
+        startImageStream(call.arguments as Map<*, *>?)
 
         result.success(null)
     }
@@ -228,9 +229,17 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
             val preview = Preview.Builder().build().apply { setSurfaceProvider(surfaceProvider) }
 
             // Analyzer
+            val sizeArgs = args["size"] as Map<*, *>?
+
+            val size = if (sizeArgs == null) {
+                Size(1280, 720)
+            } else {
+                Size((sizeArgs["width"] as Double).toInt(), (sizeArgs["height"] as Double).toInt())
+            }
+
             imageAnalyzer = ImageAnalysis.Builder()
                 .setTargetRotation(ROTATION_90)
-                .setTargetResolution(Size(1280, 720))
+                .setTargetResolution(size)
                 .build()
 
             // Bind to lifecycle.
@@ -251,12 +260,16 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
             val portrait = camera!!.cameraInfo.sensorRotationDegrees % 180 == 0
             val width = resolution.width.toDouble()
             val height = resolution.height.toDouble()
-            val size = if (portrait) mapOf("width" to width, "height" to height) else mapOf(
+            val sizeMap = if (portrait) mapOf("width" to width, "height" to height) else mapOf(
                 "width" to height,
                 "height" to width
             )
             val res =
-                mapOf("textureId" to textureId, "size" to size, "torchable" to camera!!.torchable)
+                mapOf(
+                    "textureId" to textureId,
+                    "size" to sizeMap,
+                    "torchable" to camera!!.torchable
+                )
 
             isInitialized = true
 
@@ -267,6 +280,36 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
     private fun torchNative(call: MethodCall, result: MethodChannel.Result) {
         val state = call.arguments == 1
         camera!!.cameraControl.enableTorch(state)
+        result.success(null)
+    }
+
+    private fun setOutputImageSize(call: MethodCall, result: MethodChannel.Result) {
+        val sizeArgs = call.arguments as Map<*, *>?
+
+        if (isStreaming) {
+            result.error(
+                "CameraX/SetOutputImageSize",
+                "Output image size cannot be modified while the image stream is running",
+                null
+            )
+            return
+        }
+
+        if (sizeArgs == null) {
+            result.error("CameraX/SetOutputImageSize", "Size is null", null)
+            return
+        }
+
+        val size = Size(
+            (sizeArgs["width"] as Double).toInt(),
+            (sizeArgs["height"] as Double).toInt(),
+        )
+
+        imageAnalyzer = ImageAnalysis.Builder()
+            .setTargetRotation(ROTATION_90)
+            .setTargetResolution(size)
+            .build()
+
         result.success(null)
     }
 

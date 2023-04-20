@@ -32,7 +32,7 @@ class _HomeViewState extends State<HomeView> {
   void initState() {
     super.initState();
 
-    _cameraController = CameraController();
+    _cameraController = CameraController(size: CameraSize.HD);
     _init();
   }
 
