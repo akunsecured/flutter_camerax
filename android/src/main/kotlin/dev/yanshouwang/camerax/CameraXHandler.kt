@@ -8,7 +8,6 @@ import android.graphics.ImageFormat
 import android.util.Size
 import android.view.Surface
 import android.view.Surface.ROTATION_90
-import androidx.annotation.IntDef
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
@@ -30,6 +29,10 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
         private const val INVALID_TIME: Long = -1
     }
 
+    private var isInitialized: Boolean = false
+    private var isStreaming: Boolean = false
+    private var lastImageTaken: Long = -1
+
     private var sink: EventChannel.EventSink? = null
     private var listener: PluginRegistry.RequestPermissionsResultListener? = null
 
@@ -38,21 +41,13 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
     private var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
     private var imageAnalyzer: ImageAnalysis? = null
 
-    @AnalyzeMode
-    private var analyzeMode: Int = AnalyzeMode.NONE
-
-    private var initialized: Boolean = false
-
-    private var lastImageTaken: Long = -1
-
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "state" -> stateNative(result)
-            "request" -> requestNative(result)
-            "start" -> startNative(call, result)
+            "permissionState" -> permissionState(result)
+            "requestPermission" -> requestPermissions(result)
+            "initCamera" -> initCamera(call, result)
             "torch" -> torchNative(call, result)
-            "analyze" -> analyzeNative(call, result)
-            "stop" -> stopNative(result)
+            "stopCamera" -> stopCamera(result)
             "startImageStream" -> startImageStream(call, result)
             "stopImageStream" -> stopImageStream(result)
             "isStreaming" -> isStreaming(result)
@@ -61,27 +56,15 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
     }
 
     private fun isStreaming(result: MethodChannel.Result) =
-        result.success(analyzeMode == AnalyzeMode.IMAGE_BYTES)
+        result.success(isStreaming)
 
-    private fun startImageStream(call: MethodCall, result: MethodChannel.Result) {
-        if (analyzeMode == AnalyzeMode.IMAGE_BYTES) {
-            result.error("ERROR", "Image stream is already started", null)
-            return
-        }
+    private fun startImageStream(args: Map<String, Any>?) {
+        val delay: Int? = args?.get("delay") as Int?
+        val debugging: Boolean = (args?.get("debugging") as Boolean?) ?: false
 
-        sink?.success(
-            mapOf(
-                "name" to "streaming",
-                "data" to true,
-            )
-        )
-
-        val delay = call.arguments as Int?
-        Log.d("ImageStream", "Image streaming started with delay: $delay")
+        Log.d("CameraX/ImageStream", "Starting image stream with delay: $delay")
 
         val executor = ContextCompat.getMainExecutor(activity)
-
-        analyzeMode = AnalyzeMode.IMAGE_BYTES
 
         imageAnalyzer?.setAnalyzer(
             executor
@@ -98,19 +81,26 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
             if (image.format == ImageFormat.YUV_420_888) {
                 val imageBytes = image.jpeg
 
+                val data = mutableMapOf(
+                    "bytes" to imageBytes,
+                    "timestamp" to now,
+                    "size" to mapOf(
+                        "width" to image.width,
+                        "height" to image.height,
+                    ),
+                )
+
+                if (debugging) {
+                    data["time_statistics"] = mapOf(
+                        "sent_time" to Calendar.getInstance().time.time,
+                        "process_time" to Calendar.getInstance().time.time - now,
+                    )
+                }
+
                 sink?.success(
                     mapOf(
-                        "name" to "imageBytes",
-                        "data" to mapOf(
-                            "bytes" to imageBytes,
-                            "timestamp" to now,
-                            "size" to mapOf(
-                                "width" to image.width,
-                                "height" to image.height,
-                            ),
-                            "sent" to Calendar.getInstance().time.time,
-                            "process_time" to Calendar.getInstance().time.time - now,
-                        ),
+                        "name" to "image",
+                        "data" to data
                     )
                 )
 
@@ -120,25 +110,58 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
             image.close()
         }
 
-        result.success(null)
-    }
-
-    private fun stopImageStream(result: MethodChannel.Result) {
-        if (analyzeMode == AnalyzeMode.NONE) {
-            result.error("ERROR", "Image stream is already stopped", null)
-            return
-        }
-
-        analyzeMode = AnalyzeMode.NONE
-
-        imageAnalyzer?.clearAnalyzer()
+        isStreaming = true
 
         sink?.success(
             mapOf(
-                "name" to "streaming",
-                "data" to false,
+                "name" to "streamingState",
+                "data" to isStreaming,
             )
         )
+    }
+
+    private fun startImageStream(call: MethodCall, result: MethodChannel.Result) {
+        if (!isInitialized) {
+            result.error(
+                "CameraX/InitializationError",
+                "The camera has not yet been initialized",
+                null
+            )
+            return
+        }
+
+        if (isStreaming) {
+            result.error("CameraX/ImageStreamError", "Image stream is already started", null)
+            return
+        }
+
+        startImageStream(call.arguments as Map<String, Any>?)
+
+        result.success(null)
+    }
+
+    private fun stopImageStream() {
+        Log.d("CameraX/ImageStream", "Stopping image stream")
+
+        imageAnalyzer?.clearAnalyzer()
+
+        isStreaming = false
+
+        sink?.success(
+            mapOf(
+                "name" to "streamingState",
+                "data" to isStreaming,
+            )
+        )
+    }
+
+    private fun stopImageStream(result: MethodChannel.Result) {
+        if (!isStreaming) {
+            result.error("CameraX/ImageStream", "Image stream is already stopped", null)
+            return
+        }
+
+        stopImageStream()
 
         result.success(null)
     }
@@ -155,23 +178,18 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
         requestCode: Int,
         permissions: Array<out String>,
         grantResults: IntArray
-    ): Boolean {
-        return listener?.onRequestPermissionsResult(requestCode, permissions, grantResults) ?: false
-    }
+    ): Boolean =
+        listener?.onRequestPermissionsResult(requestCode, permissions, grantResults) ?: false
 
-    private fun stateNative(result: MethodChannel.Result) {
-        // Can't get exact denied or not_determined state without request. Just return not_determined when state isn't authorized
-        val state =
-            if (ContextCompat.checkSelfPermission(
-                    activity,
-                    Manifest.permission.CAMERA
-                ) == PackageManager.PERMISSION_GRANTED
-            ) 1
-            else 0
-        result.success(state)
-    }
+    private fun permissionState(result: MethodChannel.Result) =
+        result.success(
+            ContextCompat.checkSelfPermission(
+                activity,
+                Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+        )
 
-    private fun requestNative(result: MethodChannel.Result) {
+    private fun requestPermissions(result: MethodChannel.Result) {
         listener = PluginRegistry.RequestPermissionsResultListener { requestCode, _, grantResults ->
             if (requestCode != REQUEST_CODE) {
                 false
@@ -186,9 +204,11 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
         ActivityCompat.requestPermissions(activity, permissions, REQUEST_CODE)
     }
 
-    private fun startNative(call: MethodCall, result: MethodChannel.Result) {
+    private fun initCamera(call: MethodCall, result: MethodChannel.Result) {
         val future = ProcessCameraProvider.getInstance(activity)
         val executor = ContextCompat.getMainExecutor(activity)
+
+        val args = call.arguments as Map<*, *>
 
         future.addListener({
             cameraProvider = future.get()
@@ -216,7 +236,7 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
             // Bind to lifecycle.
             val owner = activity as LifecycleOwner
             val selector =
-                if (call.arguments == 0) CameraSelector.DEFAULT_FRONT_CAMERA
+                if (args["selector"] == 0) CameraSelector.DEFAULT_FRONT_CAMERA
                 else CameraSelector.DEFAULT_BACK_CAMERA
             camera = cameraProvider!!.bindToLifecycle(owner, selector, preview, imageAnalyzer)
             camera!!.cameraInfo.torchState.observe(owner) { state ->
@@ -235,12 +255,12 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
                 "width" to height,
                 "height" to width
             )
-            val answer =
+            val res =
                 mapOf("textureId" to textureId, "size" to size, "torchable" to camera!!.torchable)
 
-            initialized = true
+            isInitialized = true
 
-            result.success(answer)
+            result.success(res)
         }, executor)
     }
 
@@ -250,33 +270,22 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
         result.success(null)
     }
 
-    private fun analyzeNative(call: MethodCall, result: MethodChannel.Result) {
-        analyzeMode = call.arguments as Int
-        result.success(null)
-    }
+    private fun stopCamera(result: MethodChannel.Result) {
+        if (isStreaming) {
+            stopImageStream()
+        }
 
-    private fun stopNative(result: MethodChannel.Result) {
         val owner = activity as LifecycleOwner
         camera!!.cameraInfo.torchState.removeObservers(owner)
         cameraProvider!!.unbindAll()
         textureEntry!!.release()
 
-        analyzeMode = AnalyzeMode.NONE
         camera = null
         textureEntry = null
         cameraProvider = null
 
-        result.success(null)
-    }
-}
+        isInitialized = false
 
-@IntDef(AnalyzeMode.NONE, AnalyzeMode.BARCODE, AnalyzeMode.IMAGE_BYTES)
-@Target(AnnotationTarget.FIELD)
-@Retention(AnnotationRetention.SOURCE)
-annotation class AnalyzeMode {
-    companion object {
-        const val NONE = 0
-        const val BARCODE = 1
-        const val IMAGE_BYTES = 2
+        result.success(null)
     }
 }

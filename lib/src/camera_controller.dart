@@ -1,9 +1,9 @@
 import 'dart:async';
 
+import 'package:camerax/src/camera_permission_state.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 
-import 'barcode.dart';
 import 'camera_args.dart';
 import 'camera_facing.dart';
 import 'camera_image.dart';
@@ -18,14 +18,13 @@ abstract class CameraController {
   /// Torch state of the camera.
   ValueNotifier<TorchState> get torchState;
 
+  /// Streaming state of the camera.
   ValueNotifier<bool> get streamingState;
 
-  bool get isStreaming;
-
-  /// A stream of barcodes.
-  Stream<Barcode> get barcodes;
-
+  /// Image stream of the camera.
   Stream<CameraImage> get images;
+
+  bool get isStreaming;
 
   /// Create a [CameraController].
   ///
@@ -36,74 +35,70 @@ abstract class CameraController {
       _CameraController(facing);
 
   /// Start the camera asynchronously.
-  Future<void> startAsync();
+  Future<void> initCamera();
 
-  Future<void> startImageStream([int? delay]);
+  /// Start the image stream.
+  Future<void> startImageStream([int? delay, bool? debugging]);
 
+  /// Stop the image stream.
   Future<void> stopImageStream();
 
   /// Switch the torch's state.
   void torch();
 
   /// Release the resources of the camera.
-  void dispose();
+  Future<void> dispose();
 }
 
 class _CameraController implements CameraController {
-  static const MethodChannel method =
+  static const MethodChannel _method =
       MethodChannel('yanshouwang.dev/camerax/method');
-  static const EventChannel event =
+  static const EventChannel _event =
       EventChannel('yanshouwang.dev/camerax/event');
 
-  static const undetermined = 0;
-  static const authorized = 1;
-  static const denied = 2;
+  static int? _id;
+  static StreamSubscription? _subscription;
 
-  static int? id;
-  static StreamSubscription? subscription;
+  final CameraFacing _facing;
+  bool _torchable;
+  late StreamController<CameraImage> _imageController;
 
-  final CameraFacing facing;
   @override
   final ValueNotifier<CameraArgs?> args;
+
   @override
   final ValueNotifier<TorchState> torchState;
+
   @override
   final ValueNotifier<bool> streamingState;
 
   @override
   bool get isStreaming => streamingState.value;
 
-  bool torchable;
-  late StreamController<Barcode> barcodesController;
-  late StreamController<CameraImage> imageController;
-
   @override
-  Stream<Barcode> get barcodes => barcodesController.stream;
+  Stream<CameraImage> get images => _imageController.stream;
 
-  @override
-  Stream<CameraImage> get images => imageController.stream;
-
-  _CameraController(this.facing)
+  _CameraController(this._facing)
       : args = ValueNotifier(null),
         torchState = ValueNotifier(TorchState.off),
         streamingState = ValueNotifier(false),
-        torchable = false {
+        _torchable = false {
     // In case new instance before dispose.
-    if (id != null) {
-      stop();
+    if (_id != null) {
+      _stopCamera();
     }
-    id = hashCode;
-    // Create barcode stream controller.
-    barcodesController = StreamController.broadcast();
+    _id = hashCode;
 
-    imageController = StreamController.broadcast();
+    // Create image stream controller.
+    _imageController = StreamController.broadcast();
 
     // Listen event handler.
-    subscription =
-        event.receiveBroadcastStream().listen((data) => handleEvent(data));
+    _subscription =
+        _event.receiveBroadcastStream().listen((data) => _handleEvent(data));
   }
 
-  void handleEvent(Map<dynamic, dynamic> event) {
+  /// Handling native events
+  void _handleEvent(Map<dynamic, dynamic> event) {
     final name = event['name'];
     final data = event['data'];
     switch (name) {
@@ -111,15 +106,11 @@ class _CameraController implements CameraController {
         final state = TorchState.values[data];
         torchState.value = state;
         break;
-      case 'barcode':
-        final barcode = Barcode.fromNative(data);
-        barcodesController.add(barcode);
+      case 'image':
+        final cameraImage = CameraImage.fromMap(data);
+        _imageController.add(cameraImage);
         break;
-      case 'imageBytes':
-        final cameraImage = CameraImage.fromNative(data);
-        imageController.add(cameraImage);
-        break;
-      case 'streaming':
+      case 'streamingState':
         streamingState.value = data;
         break;
       default:
@@ -127,74 +118,84 @@ class _CameraController implements CameraController {
     }
   }
 
-  void tryAnalyze(int mode) {
-    if (hashCode != id) {
-      return;
-    }
-    method.invokeMethod('analyze', mode);
-  }
+  Future<void> _stopCamera() async => await _method.invokeMethod('stopCamera');
 
-  @override
-  Future<void> startAsync() async {
-    ensure('startAsync');
-    // Check authorization state.
-    var state = await method.invokeMethod('state');
-    if (state == undetermined) {
-      final result = await method.invokeMethod('request');
-      state = result ? authorized : denied;
-    }
-    if (state != authorized) {
-      throw PlatformException(code: 'NO ACCESS');
-    }
-    // Start camera.
-    final answer =
-        await method.invokeMapMethod<String, dynamic>('start', facing.index);
-    final textureId = answer?['textureId'];
-    final size = toSize(answer?['size']);
-    args.value = CameraArgs(textureId, size);
-    torchable = answer?['torchable'];
-  }
-
-  @override
-  void torch() {
-    ensure('torch');
-    if (!torchable) {
-      return;
-    }
-    var state =
-        torchState.value == TorchState.off ? TorchState.on : TorchState.off;
-    method.invokeMethod('torch', state.index);
-  }
-
-  @override
-  void dispose() {
-    if (hashCode == id) {
-      stop();
-      subscription?.cancel();
-      subscription = null;
-      id = null;
-    }
-    barcodesController.close();
-  }
-
-  void stop() => method.invokeMethod('stop');
-
-  void ensure(String name) {
+  void _ensure(String name) {
     final message =
         'CameraController.$name called after CameraController.dispose\n'
         'CameraController methods should not be used after calling dispose.';
-    assert(hashCode == id, message);
+    assert(hashCode == _id, message);
   }
 
   @override
-  Future<void> startImageStream([int? delay]) async {
-    ensure('startImageStream');
-    await method.invokeMethod('startImageStream', delay);
+  Future<void> initCamera() async {
+    _ensure('startAsync');
+
+    // Check authorization state.
+    var granted = await _method.invokeMethod('permissionState');
+    var state = CameraPermissionState.values[granted ? 1 : 0];
+
+    if (state == CameraPermissionState.undetermined) {
+      final result = await _method.invokeMethod('requestPermission');
+      state = result
+          ? CameraPermissionState.authorized
+          : CameraPermissionState.denied;
+    }
+
+    if (state != CameraPermissionState.authorized) {
+      throw PlatformException(code: 'NO ACCESS');
+    }
+
+    // Initialize camera.
+    final result = await _method.invokeMapMethod<String, dynamic>(
+      'initCamera',
+      {
+        'selector': _facing.index,
+      },
+    );
+    final textureId = result?['textureId'];
+    final size = toSize(result?['size']);
+    args.value = CameraArgs(textureId, size);
+    _torchable = result?['torchable'];
+  }
+
+  @override
+  Future<void> startImageStream([int? delay, bool? debugging = false]) async {
+    _ensure('startImageStream');
+    await _method.invokeMethod(
+      'startImageStream',
+      {
+        'delay': delay,
+        'debugging': debugging,
+      },
+    );
   }
 
   @override
   Future<void> stopImageStream() async {
-    ensure('stopImageStream');
-    await method.invokeMethod('stopImageStream');
+    _ensure('stopImageStream');
+    await _method.invokeMethod('stopImageStream');
+  }
+
+  @override
+  void torch() {
+    _ensure('torch');
+    if (!_torchable) {
+      return;
+    }
+    var state =
+        torchState.value == TorchState.off ? TorchState.on : TorchState.off;
+    _method.invokeMethod('torch', state.index);
+  }
+
+  @override
+  Future<void> dispose() async {
+    if (hashCode == _id) {
+      await _stopCamera();
+      await _subscription?.cancel();
+      _subscription = null;
+      _id = null;
+    }
+    await _imageController.close();
   }
 }

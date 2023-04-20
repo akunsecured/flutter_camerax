@@ -1,6 +1,5 @@
 library camerax;
 
-export 'src/barcode.dart';
 export 'src/camera_args.dart';
 export 'src/camera_controller.dart';
 export 'src/camera_facing.dart';
