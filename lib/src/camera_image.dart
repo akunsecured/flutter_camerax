@@ -1,40 +1,51 @@
 import 'dart:typed_data';
+import 'dart:ui';
 
-class ImageSize {
-  final int width;
-  final int height;
+import 'camera_size.dart';
 
-  ImageSize({
-    required this.width,
-    required this.height,
+class CameraTimeStatistics {
+  final int processTime;
+  final int sentTime;
+  final int transferTime;
+
+  CameraTimeStatistics({
+    required this.processTime,
+    required this.sentTime,
+    required this.transferTime,
   });
 
-  factory ImageSize.fromMap(Map map) => ImageSize(
-        width: map['width'] ?? -1,
-        height: map['height'] ?? -1,
-      );
+  factory CameraTimeStatistics.fromMap(Map map) {
+    final int sentTime = map['sent_time'] ?? -1;
+
+    return CameraTimeStatistics(
+      processTime: map['process_time'] ?? -1,
+      sentTime: sentTime,
+      transferTime: DateTime.now().millisecondsSinceEpoch - sentTime,
+    );
+  }
 }
 
 class CameraImage {
   final Uint8List imageBytes;
   final int timestamp;
-  final int sent;
-  final ImageSize size;
-
-  int? arrivalTime;
+  final Size size;
+  final CameraTimeStatistics? timeStatistics;
 
   CameraImage({
     required this.imageBytes,
     required this.timestamp,
-    required this.sent,
     required this.size,
-    this.arrivalTime,
+    this.timeStatistics,
   });
 
-  factory CameraImage.fromNative(Map map) => CameraImage(
+  factory CameraImage.fromMap(Map map) => CameraImage(
         imageBytes: map['bytes'] ?? Uint8List(0),
         timestamp: map['timestamp'] ?? -1,
-        sent: map['sent'] ?? -1,
-        size: ImageSize.fromMap(map['size'] ?? {}),
+        size: sizeFromMap(
+          map['size'] ?? {},
+        ),
+        timeStatistics: map['time_statistics'] != null
+            ? CameraTimeStatistics.fromMap(map['time_statistics'])
+            : null,
       );
 }

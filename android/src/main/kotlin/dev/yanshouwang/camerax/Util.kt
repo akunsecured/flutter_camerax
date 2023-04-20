@@ -1,15 +1,12 @@
 package dev.yanshouwang.camerax
 
+import android.annotation.SuppressLint
 import android.graphics.*
 import androidx.camera.core.Camera
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.internal.utils.ImageUtil
 import com.google.mlkit.vision.barcode.common.Barcode
-import io.flutter.BuildConfig
 import java.io.ByteArrayOutputStream
-
-
-val Any.TAG: String
-    get() = javaClass.simpleName
 
 val Camera.torchable: Boolean
     get() = cameraInfo.hasFlashUnit()
@@ -33,153 +30,29 @@ val ImageProxy.yuv: ByteArray
         return data
     }
 
-val ImageProxy.nv21: ByteArray
-    get() {
-        if (BuildConfig.DEBUG) {
-            if (y.pixelStride != 1 || u.rowStride != v.rowStride || u.pixelStride != v.pixelStride) {
-                error("Assertion failed")
-            }
-        }
-
-        val ySize = width * height
-        val uvSize = ySize / 2
-        val size = ySize + uvSize
-        val data = ByteArray(size)
-
-        var offset = 0
-        // Y Plane
-        if (y.rowStride == width) {
-            y.buffer.get(data, offset, ySize)
-            offset += ySize
-        } else {
-            for (row in 0 until height) {
-                y.buffer.get(data, offset, width)
-                offset += width
-            }
-
-            if (BuildConfig.DEBUG && offset != ySize) {
-                error("Assertion failed")
-            }
-        }
-        // U,V Planes
-        if (v.rowStride == width && v.pixelStride == 2) {
-            if (BuildConfig.DEBUG && v.size != uvSize - 1) {
-                error("Assertion failed")
-            }
-
-            v.buffer.get(data, offset, 1)
-            offset += 1
-            u.buffer.get(data, offset, u.size)
-            if (BuildConfig.DEBUG) {
-                val value = v.buffer.get()
-                if (data[offset] != value) {
-                    error("Assertion failed")
-                }
-            }
-        } else {
-            for (row in 0 until height / 2)
-                for (col in 0 until width / 2) {
-                    val index = row * v.rowStride + col * v.pixelStride
-                    data[offset++] = v.buffer.get(index)
-                    data[offset++] = u.buffer.get(index)
-                }
-
-            if (BuildConfig.DEBUG && offset != size) {
-                error("Assertion failed")
-            }
-        }
-
-        return data
-    }
-
-val ImageProxy.rotatedYuv420: ByteArray
-    get() {
-        val yuv420 = ByteArray(width * height * 3 / 2)
-        // Rotate the Y luma
-        var i = 0
-        for (x in 0 until width) {
-            for (y in height - 1 downTo 0) {
-                yuv420[i] = yuv[y * width + x]
-                i++
-            }
-        }
-        // Rotate the U and V color components
-        i = width * height * 3 / 2 - 1
-        var x = width - 1
-        while (x > 0) {
-            for (y in 0 until (height / 2)) {
-                yuv420[i] = yuv[width * height + y * width + x]
-                i--
-                yuv420[i] = yuv[width * height + y * width + (x - 1)]
-                i--
-            }
-            x -= 2
-        }
-        return yuv420
-    }
-
 val ImageProxy.jpeg: ByteArray
+    @SuppressLint("RestrictedApi")
     get() {
-        val out = ByteArrayOutputStream()
+        val data = ImageUtil.yuvImageToJpegByteArray(this, null, 100)
+        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
 
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-        yuvImage.compressToJpeg(Rect(0, 0, width, height), 100, out)
+        // Rotation is required
+        val rotationMatrix = Matrix()
+        rotationMatrix.postRotate(90F)
+        val rotatedBitmap = Bitmap.createBitmap(
+            bitmap,
+            0,
+            0,
+            bitmap.width,
+            bitmap.height,
+            rotationMatrix,
+            true
+        )
+        bitmap.recycle()
 
-        /*
-        val yBuffer = planes[0].buffer
-        val vuBuffer = planes[2].buffer
-
-        val ySize = yBuffer.remaining()
-        val vuSize = vuBuffer.remaining()
-
-        val nv21Array = ByteArray(ySize + vuSize)
-
-        yBuffer.get(nv21Array, 0, ySize)
-        vuBuffer.get(nv21Array, ySize, vuSize)
-
-        val yuvImage = YuvImage(nv21Array, ImageFormat.NV21, width, height, null)
-        yuvImage.compressToJpeg(Rect(0, 0, yuvImage.width, yuvImage.height), 100, out)
-
-         */
-
-        /*
-        val ySize = y.buffer.remaining()
-        val uSize = u.buffer.remaining()
-        val vSize = v.buffer.remaining()
-
-        val size = ySize + uSize + vSize
-        val data = ByteArray(size)
-
-        var offset = 0
-        y.buffer.get(data, offset, ySize)
-        offset += ySize
-        u.buffer.get(data, offset, uSize)
-        offset += uSize
-        v.buffer.get(data, offset, vSize)
-
-        val bm = BitmapFactory.decodeByteArray(data, 0, data.size)
-        var bitmap = bm
-
-        // On android the camera rotation and the screen rotation
-        // are off by 90 degrees, so if you are capturing an image
-        // in "portrait" orientation, you'll need to rotate the image.
-        if (this.imageInfo.rotationDegrees != 0) {
-            val matrix = Matrix()
-            matrix.postRotate(this.imageInfo.rotationDegrees.toFloat())
-            val scaledBitmap = Bitmap.createScaledBitmap(
-                bm,
-                bm.width, bm.height, true
-            )
-            bitmap = Bitmap.createBitmap(
-                scaledBitmap, 0, 0,
-                scaledBitmap.width, scaledBitmap.height, matrix, true
-            )
-        }
-
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
-         */
-
-        return out.toByteArray()
+        val outputStream = ByteArrayOutputStream()
+        rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
+        return outputStream.toByteArray()
     }
 
 val ImageProxy.PlaneProxy.size

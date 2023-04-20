@@ -1,8 +1,6 @@
-import 'package:flutter/foundation.dart';
+import 'package:camerax_example/views/home_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-
-import 'views.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,10 +18,6 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       home: HomeView(),
       theme: ThemeData.light().copyWith(platform: TargetPlatform.iOS),
-      routes: {
-        'analyze': (context) => AnalyzeView(),
-        'display': (context) => DisplayView(),
-      },
     );
   }
 }
