@@ -20,6 +20,7 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 import io.flutter.view.TextureRegistry
 import java.util.*
+import kotlinx.coroutines.*
 
 class CameraXHandler(private val activity: Activity, private val textureRegistry: TextureRegistry) :
     MethodChannel.MethodCallHandler, EventChannel.StreamHandler,
@@ -80,35 +81,41 @@ class CameraXHandler(private val activity: Activity, private val textureRegistry
             }
 
             if (image.format == ImageFormat.YUV_420_888) {
-                val imageBytes = image.jpeg
+                var imageBytes: ByteArray
 
-                val data = mutableMapOf(
-                    "bytes" to imageBytes,
-                    "timestamp" to now,
-                    "size" to mapOf(
-                        "width" to image.width,
-                        "height" to image.height,
-                    ),
-                )
+                GlobalScope.launch(Dispatchers.IO) {
+                    imageBytes = image.jpeg
 
-                if (debugging) {
-                    data["time_statistics"] = mapOf(
-                        "sent_time" to Calendar.getInstance().time.time,
-                        "process_time" to Calendar.getInstance().time.time - now,
-                    )
+                    withContext(Dispatchers.Main) {
+                        val data = mutableMapOf(
+                            "bytes" to imageBytes,
+                            "timestamp" to now,
+                            "size" to mapOf(
+                                "width" to image.width,
+                                "height" to image.height,
+                            ),
+                        )
+
+                        if (debugging) {
+                            data["time_statistics"] = mapOf(
+                                "sent_time" to Calendar.getInstance().time.time,
+                                "process_time" to Calendar.getInstance().time.time - now,
+                            )
+                        }
+
+                        sink?.success(
+                            mapOf(
+                                "name" to "image",
+                                "data" to data
+                            )
+                        )
+
+                        lastImageTaken = now
+
+                        image.close()
+                    }
                 }
-
-                sink?.success(
-                    mapOf(
-                        "name" to "image",
-                        "data" to data
-                    )
-                )
-
-                lastImageTaken = now
             }
-
-            image.close()
         }
 
         isStreaming = true
